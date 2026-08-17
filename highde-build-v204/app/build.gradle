@@ -10,8 +10,8 @@ android {
         applicationId 'com.tungee.amapbridge'
         minSdk 26
         targetSdk 35
-        versionCode 221
-        versionName '2.2.1'
+        versionCode 230
+        versionName '2.3.0'
     }
 
     buildTypes {
@@ -26,4 +26,9 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    // Bundled Chinese Text Recognition V2 model: works immediately/offline after APK install.
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
 }
