@@ -17,7 +17,7 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private EditText hostEdit, portEdit;
-    private TextView status;
+    private TextView status, health;
     private SharedPreferences prefs;
 
     @Override public void onCreate(Bundle b) {
@@ -25,6 +25,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("bridge", MODE_PRIVATE);
         buildUi();
     }
+    @Override protected void onResume(){ super.onResume(); refreshHealth(); }
 
     private TextView label(String s, int size) {
         TextView v = new TextView(this);
@@ -34,56 +35,77 @@ public class MainActivity extends Activity {
     private Button button(String s) {
         Button b = new Button(this); b.setText(s); b.setTextSize(17); b.setAllCaps(false); return b;
     }
+    private boolean amapInstalled(){
+        try{return getPackageManager().getLaunchIntentForPackage("com.autonavi.minimap")!=null;}catch(Exception e){return false;}
+    }
+    private boolean accessibilityEnabled(){
+        try{
+            String enabled=Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            return enabled!=null && enabled.toLowerCase().contains(getPackageName().toLowerCase()) && enabled.toLowerCase().contains("amapaccessibilityservice");
+        }catch(Exception e){return AmapAccessibilityService.isAlive();}
+    }
+    private void refreshHealth(){
+        if(health==null)return;
+        boolean a=amapInstalled(), acc=accessibilityEnabled()||AmapAccessibilityService.isAlive(), net=BridgeService.isConnected();
+        String task=TaskState.active?"进行中："+TaskState.hotelName:"无";
+        health.setText("高德App："+(a?"✓ 已安装":"✗ 未安装")+"\n无障碍："+(acc?"✓ 已开启":"✗ 未开启")+"\n电脑连接："+(net?"✓ 已连接":"○ 未连接")+"\n当前任务："+task);
+        health.setTextColor((a&&acc)?Color.rgb(20,125,70):Color.rgb(190,60,35));
+    }
     private void buildUi() {
         ScrollView sc = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(40,45,40,45);
         root.setBackgroundColor(Color.rgb(246,250,248)); sc.addView(root);
 
-        TextView title = label("高德酒店采集助手 2.0.4", 27);
+        TextView title = label("高德酒店采集助手 2.0.5", 27);
         title.setTextColor(Color.rgb(17,135,82)); title.setGravity(Gravity.CENTER_HORIZONTAL); root.addView(title);
-        TextView sub = label("手机 ↔ Wi-Fi ↔ 电脑｜无需USB / ADB", 15);
+        TextView sub = label("真机稳定版｜Wi-Fi连接｜任务状态自检", 15);
         sub.setGravity(Gravity.CENTER_HORIZONTAL); root.addView(sub);
         status = label("状态：未连接", 17); status.setTextColor(Color.rgb(180,80,10)); root.addView(status);
+        health=label("正在自检…",16); health.setPadding(18,14,18,18); root.addView(health);
 
-        Button discover = button("① 自动发现电脑"); root.addView(discover);
-        discover.setOnClickListener(v -> {
-            status.setText("状态：正在局域网发现电脑…");
-            new Thread(() -> {
-                Discovery.Result r = Discovery.findPc(2600);
-                runOnUiThread(() -> {
-                    if (r != null) {
-                        hostEdit.setText(r.host); portEdit.setText(String.valueOf(r.port));
-                        status.setText("已发现电脑：" + r.host + ":" + r.port);
-                    } else status.setText("未发现电脑：请确认手机与电脑在同一Wi-Fi，电脑端已启动连接服务");
-                });
-            }).start();
-        });
-
-        root.addView(label("电脑IP（自动发现失败时可手填）", 14));
-        hostEdit = new EditText(this); hostEdit.setSingleLine(true); hostEdit.setText(prefs.getString("host", "")); root.addView(hostEdit);
-        root.addView(label("端口", 14));
-        portEdit = new EditText(this); portEdit.setSingleLine(true); portEdit.setInputType(InputType.TYPE_CLASS_NUMBER); portEdit.setText(String.valueOf(prefs.getInt("port", 8765))); root.addView(portEdit);
+        Button check=button("① 手机环境自检"); root.addView(check);
+        check.setOnClickListener(v->{refreshHealth(); if(!accessibilityEnabled()) Toast.makeText(this,"无障碍未开启：请点击下一步开启",Toast.LENGTH_LONG).show();});
 
         Button acc = button("② 开启无障碍读取权限"); root.addView(acc);
         acc.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
-        Button testAmap = button("③ 检查/打开高德地图"); root.addView(testAmap);
+        Button discover = button("③ 自动发现电脑"); root.addView(discover);
+        discover.setOnClickListener(v -> {
+            status.setText("状态：正在局域网发现电脑…");
+            new Thread(() -> {
+                Discovery.Result r = Discovery.findPc(3200);
+                runOnUiThread(() -> {
+                    if (r != null) {
+                        hostEdit.setText(r.host); portEdit.setText(String.valueOf(r.port));
+                        status.setText("已发现电脑：" + r.host + ":" + r.port);
+                    } else status.setText("未发现电脑：可在下面手填电脑端顶部显示的IP");
+                    refreshHealth();
+                });
+            }).start();
+        });
+
+        root.addView(label("电脑IP（发现失败可手填，填电脑软件顶部的IP）", 14));
+        hostEdit = new EditText(this); hostEdit.setSingleLine(true); hostEdit.setText(prefs.getString("host", "")); root.addView(hostEdit);
+        root.addView(label("端口", 14));
+        portEdit = new EditText(this); portEdit.setSingleLine(true); portEdit.setInputType(InputType.TYPE_CLASS_NUMBER); portEdit.setText(String.valueOf(prefs.getInt("port", 8765))); root.addView(portEdit);
+
+        Button connect = button("④ 连接电脑并等待任务"); root.addView(connect);
+        connect.setOnClickListener(v -> connect());
+
+        Button testAmap = button("⑤ 检查/打开高德地图"); root.addView(testAmap);
         testAmap.setOnClickListener(v -> {
             Intent i = getPackageManager().getLaunchIntentForPackage("com.autonavi.minimap");
             if (i == null) Toast.makeText(this, "未检测到高德地图App", Toast.LENGTH_LONG).show();
             else startActivity(i);
         });
 
-        Button connect = button("④ 连接电脑并等待任务"); root.addView(connect);
-        connect.setOnClickListener(v -> connect());
-
         Button stop = button("停止连接"); root.addView(stop);
-        stop.setOnClickListener(v -> { stopService(new Intent(this, BridgeService.class)); status.setText("状态：已停止"); });
+        stop.setOnClickListener(v -> { stopService(new Intent(this, BridgeService.class)); status.setText("状态：已停止"); refreshHealth(); });
 
-        TextView note = label("使用顺序：\n1. 电脑端先启动；\n2. 手机和电脑在同一Wi-Fi；\n3. 第一次开启本App无障碍权限；\n4. 自动发现电脑；\n5. 点连接电脑并等待任务；\n6. 电脑导入高德Excel后开始补全。", 14);
+        TextView note = label("必须满足：\n✓ 真安卓手机（不推荐模拟器）\n✓ 手机与电脑同一Wi-Fi\n✓ 无障碍里已开启“高德酒店采集助手”\n✓ 手机通知栏能看到“已连接电脑，等待酒店任务”\n\n电脑开始后，手机会自动打开高德指定酒店。若无障碍未开启，电脑会立即提示，不会再等28秒超时。", 14);
         note.setTextColor(Color.DKGRAY); root.addView(note);
-        setContentView(sc);
+        setContentView(sc); refreshHealth();
     }
 
     private void connect() {
@@ -91,10 +113,13 @@ public class MainActivity extends Activity {
         int port;
         try { port = Integer.parseInt(portEdit.getText().toString().trim()); } catch(Exception e){ port=8765; }
         if (host.isEmpty()) { Toast.makeText(this,"请先自动发现电脑或填写电脑IP",Toast.LENGTH_LONG).show(); return; }
+        if(!accessibilityEnabled()) { Toast.makeText(this,"无障碍服务还没开启，请先完成第②步",Toast.LENGTH_LONG).show(); refreshHealth(); return; }
+        if(!amapInstalled()){ Toast.makeText(this,"没有检测到高德地图App",Toast.LENGTH_LONG).show(); return; }
         prefs.edit().putString("host",host).putInt("port",port).apply();
         Intent s = new Intent(this, BridgeService.class); s.putExtra("host",host); s.putExtra("port",port);
         startForegroundService(s);
         status.setText("状态：正在连接 " + host + ":" + port);
-        Toast.makeText(this,"连接服务已启动，可切换到高德地图",Toast.LENGTH_LONG).show();
+        Toast.makeText(this,"连接服务已启动；看到通知栏“已连接电脑”后再从电脑开始",Toast.LENGTH_LONG).show();
+        new android.os.Handler().postDelayed(this::refreshHealth,1800);
     }
 }
