@@ -48,9 +48,9 @@ public class BridgeService extends Service {
                 socket=new Socket(host,port); socket.setTcpNoDelay(true); connected=true;
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
-                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.1.0")
+                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.1.1")
                         .put("accessibility",AmapAccessibilityService.isAlive()));
-                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，智能搜寻模式待命"));
+                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，主动搜索模式待命"));
                 wait=1500; String line;
                 while(running && (line=reader.readLine())!=null) handle(line);
             }catch(Exception e){
@@ -72,21 +72,24 @@ public class BridgeService extends Service {
                     return;
                 }
                 TaskState.set(id,poi,name,lat,lon,address);
-                sendDebug(id,"收到任务：先POI直达，找不到线索将自动关键词搜索｜"+name+"｜"+poi);
-                boolean ok=AmapLauncher.openPoi(this,poi,name,lat,lon);
-                send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",ok));
-                if(!ok){
-                    sendDebug(id,"POI直达失败，改用关键词搜索");
-                    boolean sok=AmapLauncher.openSearch(this,name,lat,lon);
-                    if(!sok){
-                        sendResult(id,poi,name,"","","","","","open_failed","POI直达和关键词搜索都无法调起高德地图","");
-                        TaskState.clear(); return;
-                    }
+                sendDebug(id,"收到任务：优先主动搜索酒店名并提交搜索｜"+name+"｜"+poi);
+
+                boolean ok=AmapLauncher.openSearch(this,name,lat,lon);
+                if(ok){
                     AmapAccessibilityService.markSearchMode();
+                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",true).put("mode","search"));
+                }else{
+                    sendDebug(id,"高德关键词搜索调起失败，改用POI_ID直达");
+                    boolean pok=AmapLauncher.openPoi(this,poi,name,lat,lon);
+                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",pok).put("mode","poi"));
+                    if(!pok){
+                        sendResult(id,poi,name,"","","","","","open_failed","关键词搜索和POI直达都无法调起高德地图","");
+                        TaskState.clear();return;
+                    }
                 }
-                mainHandler.postDelayed(AmapAccessibilityService::kick,700);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,1800);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,3500);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,500);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,1200);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,2400);
             } else if("stop".equals(cmd)){ TaskState.clear(); }
         }catch(Exception e){ sendDebug(TaskState.taskId,"任务处理异常："+e.getClass().getSimpleName()+" "+String.valueOf(e.getMessage())); }
     }
@@ -109,6 +112,6 @@ public class BridgeService extends Service {
         try{if(reader!=null)reader.close();}catch(Exception ignored){}
         try{if(writer!=null)writer.close();}catch(Exception ignored){}
         try{if(socket!=null)socket.close();}catch(Exception ignored){}
-        reader=null; writer=null; socket=null;
+        reader=null;writer=null;socket=null;
     }
 }
