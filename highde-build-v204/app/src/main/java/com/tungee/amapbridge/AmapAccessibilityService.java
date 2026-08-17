@@ -3,6 +3,7 @@ package com.tungee.amapbridge;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.DisplayMetrics;
@@ -65,7 +66,6 @@ public class AmapAccessibilityService extends AccessibilityService {
         BridgeService.sendDebug(TaskState.taskId,(searchMode?"搜索页":"详情页")+"读取文字 "+texts.size()+" 项｜滑动="+scrollCount+"｜搜索滑动="+searchScrollCount);
 
         if(handleNetworkError(root,raw))return;
-
         if(searchMode){handleSearchPage(root,raw);return;}
         handleDetailPage(root,raw);
     }
@@ -76,15 +76,17 @@ public class AmapAccessibilityService extends AccessibilityService {
                 retriedNetwork=true;BridgeService.sendDebug(TaskState.taskId,"检测到高德网络异常，已点击刷新重试");h.postDelayed(scanRunnable,2400);return true;
             }
             long elapsed=System.currentTimeMillis()-TaskState.startedAt;
-            if(elapsed>6500){
-                Result r=parse(raw,TaskState.hotelName);
-                finish(r,"amap_network_error","高德页面提示网络异常",raw);return true;
-            }
+            if(elapsed>6500){Result r=parse(raw,TaskState.hotelName);finish(r,"amap_network_error","高德页面提示网络异常",raw);return true;}
         }
         return false;
     }
 
     private void handleSearchPage(AccessibilityNodeInfo root,String raw){
+        if(looksLikeHotelDetail(raw,TaskState.hotelName)){
+            searchMode=false;scrollCount=0;clickedInfo=false;
+            BridgeService.sendDebug(TaskState.taskId,"关键词搜索已直接进入酒店详情，无需点击结果");
+            h.postDelayed(scanRunnable,350);return;
+        }
         if(clickBestHotelResult(root,TaskState.hotelName)){
             searchMode=false;scrollCount=0;clickedInfo=false;
             BridgeService.sendDebug(TaskState.taskId,"关键词搜索已匹配并点击酒店结果，进入详情");
@@ -95,23 +97,27 @@ public class AmapAccessibilityService extends AccessibilityService {
             searchScrollCount++;BridgeService.sendDebug(TaskState.taskId,moved?"搜索结果未命中，继续向下找匹配酒店":"搜索结果页无法滚动，继续等待");
             h.postDelayed(scanRunnable,800);return;
         }
-        Result r=parse(raw,TaskState.hotelName);
-        finish(r,"search_no_match","关键词搜索未找到匹配酒店",raw);
+        Result r=parse(raw,TaskState.hotelName);finish(r,"search_no_match","关键词搜索未找到匹配酒店",raw);
+    }
+
+    private boolean looksLikeHotelDetail(String raw,String expected){
+        String n=norm(expected),r=norm(raw);if(n.isEmpty())return false;
+        String key=n.length()>7?n.substring(0,7):n;
+        if(!r.contains(key))return false;
+        int markers=0;
+        for(String m:new String[]{"评分","导航","电话","收藏","分享","路线","地址"})if(raw.contains(m))markers++;
+        return markers>=3;
     }
 
     private void handleDetailPage(AccessibilityNodeInfo root,String raw){
         Result r=parse(raw,TaskState.hotelName);
         long elapsed=System.currentTimeMillis()-TaskState.startedAt;
-
-        if(!r.open.isEmpty()){
-            finish(r,"success","",raw);return;
-        }
+        if(!r.open.isEmpty()){finish(r,"success","",raw);return;}
 
         if(!clickedInfo&&clickAny(root,new String[]{"酒店信息","酒店详情","设施服务","酒店设施","更多酒店信息","关于酒店"})){
             clickedInfo=true;BridgeService.sendDebug(TaskState.taskId,"已点击酒店信息/酒店详情入口");h.postDelayed(scanRunnable,900);return;
         }
 
-        // POI直达只快速扫几屏；没找到目标线索后自动切换关键词搜索。
         if(!searchUsed&&scrollCount>=3){
             boolean ok=AmapLauncher.openSearch(this,TaskState.hotelName,TaskState.lat,TaskState.lon);
             if(ok){
@@ -127,10 +133,8 @@ public class AmapAccessibilityService extends AccessibilityService {
             scrollCount++;BridgeService.sendDebug(TaskState.taskId,moved?"已执行上滑，继续找开业/装修/房量/电话":"本轮无法滚动，稍后重试");
             h.postDelayed(scanRunnable,moved?780:650);return;
         }
-
-        if(elapsed>25000||scrollCount>=maxScroll){
-            finish(r,r.open.isEmpty()?"open_time_not_found":"partial","已执行POI直达+关键词搜索",raw);
-        }else h.postDelayed(scanRunnable,650);
+        if(elapsed>25000||scrollCount>=maxScroll)finish(r,r.open.isEmpty()?"open_time_not_found":"partial","已执行POI直达+关键词搜索",raw);
+        else h.postDelayed(scanRunnable,650);
     }
 
     private void finish(Result r,String status,String extra,String raw){
@@ -165,10 +169,11 @@ public class AmapAccessibilityService extends AccessibilityService {
         if(n==null)return;
         CharSequence t=n.getText();
         if(t!=null){
-            String text=t.toString().trim();
-            String cls=String.valueOf(n.getClassName());
+            String text=t.toString().trim();String cls=String.valueOf(n.getClassName());
             if(!text.isEmpty()&&!cls.contains("EditText")){
                 int score=nameScore(text,expected);
+                Rect b=new Rect();n.getBoundsInScreen(b);DisplayMetrics dm=getResources().getDisplayMetrics();
+                if(b.centerY()>0&&b.centerY()<dm.heightPixels*0.15)score-=35;
                 if(score>best.score){best.score=score;best.node=n;best.text=text;}
             }
         }
@@ -179,29 +184,20 @@ public class AmapAccessibilityService extends AccessibilityService {
         if(a.equals(e))return 100;
         if(a.contains(e)||e.contains(a)){int min=Math.min(a.length(),e.length());if(min>=8)return 92;if(min>=5)return 80;}
         int common=0,max=Math.min(a.length(),e.length());while(common<max&&a.charAt(common)==e.charAt(common))common++;
-        if(common>=10)return 85;if(common>=7)return 72;if(common>=5)return 60;
-        return 0;
+        if(common>=10)return 85;if(common>=7)return 72;if(common>=5)return 60;return 0;
     }
 
     private boolean clickAny(AccessibilityNodeInfo n,String[] keys){
         if(n==null)return false;
-        CharSequence t=n.getText(),cd=n.getContentDescription();
-        String s=t!=null?t.toString():(cd!=null?cd.toString():"");
-        if(!s.isEmpty()){
-            for(String k:keys)if(s.equals(k)||s.contains(k)){
-                AccessibilityNodeInfo c=n;
-                for(int i=0;i<6&&c!=null;i++,c=c.getParent())if(c.isClickable()&&c.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true;
-            }
+        CharSequence t=n.getText(),cd=n.getContentDescription();String s=t!=null?t.toString():(cd!=null?cd.toString():"");
+        if(!s.isEmpty())for(String k:keys)if(s.equals(k)||s.contains(k)){
+            AccessibilityNodeInfo c=n;for(int i=0;i<6&&c!=null;i++,c=c.getParent())if(c.isClickable()&&c.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true;
         }
-        for(int i=0;i<n.getChildCount();i++)if(clickAny(n.getChild(i),keys))return true;
-        return false;
+        for(int i=0;i<n.getChildCount();i++)if(clickAny(n.getChild(i),keys))return true;return false;
     }
-
     private boolean scrollForward(AccessibilityNodeInfo n){
-        if(n==null)return false;
-        if(n.isScrollable()&&n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;
-        for(int i=0;i<n.getChildCount();i++)if(scrollForward(n.getChild(i)))return true;
-        return false;
+        if(n==null)return false;if(n.isScrollable()&&n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;
+        for(int i=0;i<n.getChildCount();i++)if(scrollForward(n.getChild(i)))return true;return false;
     }
     private boolean swipeUp(){
         try{
@@ -227,10 +223,9 @@ public class AmapAccessibilityService extends AccessibilityService {
         });
         r.rooms=first(s,new String[]{"(?:客房数|客房数量|房间数|房型数量)\\s*[:：]?\\s*(\\d{1,4})\\s*间?","(\\d{1,4})\\s*间\\s*(?:客房|房间)"});
         r.phone=first(s,new String[]{"(?:酒店电话|联系电话|电话|前台电话)\\s*[:：]?\\s*((?:\\+?86[- ]?)?(?:0\\d{2,3}[- ]?)?\\d{7,8}|1[3-9]\\d{9})"});
-        String a=norm(expected),b=norm(s);if(!a.isEmpty()){String key=a.length()>8?a.substring(0,8):a;r.nameCheck=b.contains(key)?"通过":"待核实";}
-        return r;
+        String a=norm(expected),b=norm(s);if(!a.isEmpty()){String key=a.length()>8?a.substring(0,8):a;r.nameCheck=b.contains(key)?"通过":"待核实";}return r;
     }
     private String first(String s,String[] ps){for(String p:ps){Matcher m=Pattern.compile(p,Pattern.CASE_INSENSITIVE).matcher(s);if(m.find())return m.group(1).replace(" ","").trim();}return "";}
-    private String norm(String s){return s==null?"":s.replaceAll("[\\s·•・\\-—_（）()【】\\[\\]<>〈〉]","").replace("酒店","").replace("宾馆","").replace("大酒店","");}
+    private String norm(String s){return s==null?"":s.replaceAll("[\\s·•・\\-—_（）()【】\\[\\]<>〈〉]","").replace("大酒店","").replace("酒店","").replace("宾馆","");}
     @Override public void onInterrupt(){}
 }
