@@ -48,9 +48,9 @@ public class BridgeService extends Service {
                 socket=new Socket(host,port); socket.setTcpNoDelay(true); connected=true;
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
-                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.1.1")
+                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.2.0")
                         .put("accessibility",AmapAccessibilityService.isAlive()));
-                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，主动搜索模式待命"));
+                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，结果卡片直读模式待命"));
                 wait=1500; String line;
                 while(running && (line=reader.readLine())!=null) handle(line);
             }catch(Exception e){
@@ -72,12 +72,12 @@ public class BridgeService extends Service {
                     return;
                 }
                 TaskState.set(id,poi,name,lat,lon,address);
-                sendDebug(id,"收到任务：优先主动搜索酒店名并提交搜索｜"+name+"｜"+poi);
+                sendDebug(id,"收到任务：优先搜索酒店并直接读取结果卡片中的开业年份/房量｜"+name+"｜"+poi);
 
                 boolean ok=AmapLauncher.openSearch(this,name,lat,lon);
                 if(ok){
                     AmapAccessibilityService.markSearchMode();
-                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",true).put("mode","search"));
+                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",true).put("mode","search_card"));
                 }else{
                     sendDebug(id,"高德关键词搜索调起失败，改用POI_ID直达");
                     boolean pok=AmapLauncher.openPoi(this,poi,name,lat,lon);
@@ -87,9 +87,9 @@ public class BridgeService extends Service {
                         TaskState.clear();return;
                     }
                 }
-                mainHandler.postDelayed(AmapAccessibilityService::kick,500);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,1200);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,2400);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,450);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,1050);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,2100);
             } else if("stop".equals(cmd)){ TaskState.clear(); }
         }catch(Exception e){ sendDebug(TaskState.taskId,"任务处理异常："+e.getClass().getSimpleName()+" "+String.valueOf(e.getMessage())); }
     }
