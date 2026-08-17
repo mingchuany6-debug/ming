@@ -5,7 +5,9 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import java.io.*;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
@@ -17,16 +19,31 @@ public class BridgeService extends Service {
     private Socket socket; private BufferedReader reader; private BufferedWriter writer;
     private String host; private int port;
     private final Handler mainHandler=new Handler(Looper.getMainLooper());
+    private PowerManager.WakeLock wakeLock;
 
     public static boolean isConnected(){ return connected; }
-    @Override public void onCreate(){ super.onCreate(); instance=this; createChannel(); }
+
+    @Override public void onCreate(){
+        super.onCreate(); instance=this; createChannel();
+        try{
+            PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+            wakeLock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"HighDeHotel:Bridge");
+            wakeLock.setReferenceCounted(false); wakeLock.acquire(6*60*60*1000L);
+        }catch(Exception ignored){}
+    }
+
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null){ host=intent.getStringExtra("host"); port=intent.getIntExtra("port",8765); }
-        startForeground(1001, notification("正在连接电脑…"));
+        startForeground(1001, notification("正在连接电脑…V2.3 OCR"));
         if(!running){running=true; new Thread(this::loop,"bridge-net").start();}
         return START_STICKY;
     }
-    @Override public void onDestroy(){running=false; connected=false; close(); instance=null; super.onDestroy();}
+
+    @Override public void onDestroy(){
+        running=false; connected=false; close();
+        try{if(wakeLock!=null&&wakeLock.isHeld())wakeLock.release();}catch(Exception ignored){}
+        instance=null; super.onDestroy();
+    }
     @Override public IBinder onBind(Intent i){return null;}
 
     private void createChannel(){
@@ -40,59 +57,68 @@ public class BridgeService extends Service {
                 .setContentTitle("高德酒店采集助手").setContentText(txt)
                 .setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build();
     }
+
     private void loop(){
-        int wait=1500;
+        int wait=900;
         while(running){
             try{
-                if(host==null||host.trim().isEmpty()){Thread.sleep(1500);continue;}
-                socket=new Socket(host,port); socket.setTcpNoDelay(true); connected=true;
+                if(host==null||host.trim().isEmpty()){Thread.sleep(1000);continue;}
+                Socket s=new Socket(); s.setKeepAlive(true); s.setTcpNoDelay(true); s.connect(new InetSocketAddress(host,port),5000);
+                socket=s; connected=true;
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
-                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.2.1")
-                        .put("accessibility",AmapAccessibilityService.isAlive()));
-                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，开业日期优先模式待命"));
-                wait=1500; String line;
+                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.3.0")
+                        .put("accessibility",AmapAccessibilityServiceV23.isAlive()).put("ocr",android.os.Build.VERSION.SDK_INT>=30));
+                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑｜屏幕OCR模式"));
+                wait=900; String line;
                 while(running && (line=reader.readLine())!=null) handle(line);
             }catch(Exception e){
                 try{Thread.sleep(wait);}catch(Exception ignored){}
-                wait=Math.min(10000,wait+1200);
+                wait=Math.min(5000,wait+700);
             } finally { connected=false; close(); }
         }
     }
+
     private void handle(String line){
         try{
             JSONObject j=new JSONObject(line); String cmd=j.optString("cmd");
-            if("ping".equals(cmd)){send(new JSONObject().put("type","pong").put("accessibility",AmapAccessibilityService.isAlive()));return;}
-            if("status".equals(cmd)){send(new JSONObject().put("type","status").put("accessibility",AmapAccessibilityService.isAlive()).put("task_active",TaskState.active));return;}
+            if("ping".equals(cmd)){send(new JSONObject().put("type","pong").put("accessibility",AmapAccessibilityServiceV23.isAlive()).put("task_active",TaskState.active));return;}
+            if("status".equals(cmd)){send(new JSONObject().put("type","status").put("accessibility",AmapAccessibilityServiceV23.isAlive()).put("task_active",TaskState.active));return;}
             if("task".equals(cmd)){
                 String id=j.optString("task_id"), poi=j.optString("poi_id"), name=j.optString("name"), lat=j.optString("lat"), lon=j.optString("lon"), address=j.optString("address");
-                if(!AmapAccessibilityService.isAlive()){
-                    sendDebug(id,"无障碍服务未开启/未连接，任务不执行");
-                    sendResult(id,poi,name,"","","","","","accessibility_off","请在手机设置中开启“高德酒店采集助手”无障碍服务","");
+                if(!AmapAccessibilityServiceV23.isAlive()){
+                    sendDebug(id,"V2.3无障碍/OCR服务未开启，任务不执行");
+                    sendResult(id,poi,name,"","","","","","accessibility_off","请重新开启高德酒店采集助手无障碍权限","");
+                    return;
+                }
+                if(TaskState.active && TaskState.taskId!=null && !TaskState.taskId.equals(id)){
+                    sendDebug(id,"拒绝重叠任务：手机仍在处理上一家酒店");
+                    sendResult(id,poi,name,"","","","","","busy_rejected","上一任务尚未结束，已阻止任务重叠","");
                     return;
                 }
                 TaskState.set(id,poi,name,lat,lon,address);
-                sendDebug(id,"收到任务：搜索酒店→匹配结果卡→优先读取完整开业日期/房量｜"+name+"｜"+poi);
+                sendDebug(id,"收到V2.3任务：搜索酒店→进入详情→截屏中文OCR识别开业时间｜"+name+"｜"+poi);
 
                 boolean ok=AmapLauncher.openSearch(this,name,lat,lon);
                 if(ok){
-                    AmapAccessibilityService.markSearchMode();
-                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",true).put("mode","search_card"));
+                    AmapAccessibilityServiceV23.markSearchMode();
+                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",true).put("mode","ocr_search"));
                 }else{
-                    sendDebug(id,"高德关键词搜索调起失败，改用POI_ID直达");
+                    sendDebug(id,"搜索调起失败，改用POI_ID直达详情+OCR");
                     boolean pok=AmapLauncher.openPoi(this,poi,name,lat,lon);
-                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",pok).put("mode","poi"));
+                    send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",pok).put("mode","ocr_poi"));
                     if(!pok){
-                        sendResult(id,poi,name,"","","","","","open_failed","关键词搜索和POI直达都无法调起高德地图","");
+                        sendResult(id,poi,name,"","","","","","open_failed","搜索和POI直达都无法调起高德","");
                         TaskState.clear();return;
                     }
                 }
-                mainHandler.postDelayed(AmapAccessibilityService::kick,450);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,1050);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,2100);
+                mainHandler.postDelayed(AmapAccessibilityServiceV23::kick,450);
+                mainHandler.postDelayed(AmapAccessibilityServiceV23::kick,1200);
+                mainHandler.postDelayed(AmapAccessibilityServiceV23::kick,2400);
             } else if("stop".equals(cmd)){ TaskState.clear(); }
         }catch(Exception e){ sendDebug(TaskState.taskId,"任务处理异常："+e.getClass().getSimpleName()+" "+String.valueOf(e.getMessage())); }
     }
+
     private synchronized void send(JSONObject j){
         try{ if(writer!=null){writer.write(j.toString());writer.write("\n");writer.flush();} }catch(Exception ignored){}
     }
