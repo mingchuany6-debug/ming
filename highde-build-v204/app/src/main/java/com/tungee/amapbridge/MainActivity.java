@@ -57,9 +57,9 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(40,45,40,45);
         root.setBackgroundColor(Color.rgb(246,250,248)); sc.addView(root);
 
-        TextView title = label("高德酒店采集助手 2.0.5", 27);
+        TextView title = label("高德酒店采集助手 2.1.0", 27);
         title.setTextColor(Color.rgb(17,135,82)); title.setGravity(Gravity.CENTER_HORIZONTAL); root.addView(title);
-        TextView sub = label("真机稳定版｜Wi-Fi连接｜任务状态自检", 15);
+        TextView sub = label("智能搜寻版｜POI直达 + 酒店名搜索回退 + 自动填充", 15);
         sub.setGravity(Gravity.CENTER_HORIZONTAL); root.addView(sub);
         status = label("状态：未连接", 17); status.setTextColor(Color.rgb(180,80,10)); root.addView(status);
         health=label("正在自检…",16); health.setPadding(18,14,18,18); root.addView(health);
@@ -103,7 +103,7 @@ public class MainActivity extends Activity {
         Button stop = button("停止连接"); root.addView(stop);
         stop.setOnClickListener(v -> { stopService(new Intent(this, BridgeService.class)); status.setText("状态：已停止"); refreshHealth(); });
 
-        TextView note = label("必须满足：\n✓ 真安卓手机（不推荐模拟器）\n✓ 手机与电脑同一Wi-Fi\n✓ 无障碍里已开启“高德酒店采集助手”\n✓ 手机通知栏能看到“已连接电脑，等待酒店任务”\n\n电脑开始后，手机会自动打开高德指定酒店。若无障碍未开启，电脑会立即提示，不会再等28秒超时。", 14);
+        TextView note = label("工作方式：\n电脑逐家下发酒店 → 手机先按POI_ID直达 → 快速扫几屏没有目标字段时，自动切换“酒店名+经纬度范围”搜索 → 自动点击最匹配酒店 → 继续寻找开业/装修/房量/电话 → 立即回传电脑填表。\n\n必须满足：\n✓ 安卓真机（不推荐模拟器）\n✓ 手机与电脑同一Wi-Fi\n✓ 无障碍已开启\n✓ 高德App本身网络正常。", 14);
         note.setTextColor(Color.DKGRAY); root.addView(note);
         setContentView(sc); refreshHealth();
     }
@@ -119,7 +119,7 @@ public class MainActivity extends Activity {
         Intent s = new Intent(this, BridgeService.class); s.putExtra("host",host); s.putExtra("port",port);
         startForegroundService(s);
         status.setText("状态：正在连接 " + host + ":" + port);
-        Toast.makeText(this,"连接服务已启动；看到通知栏“已连接电脑”后再从电脑开始",Toast.LENGTH_LONG).show();
+        Toast.makeText(this,"智能搜寻服务已启动；看到“已连接电脑”后即可从电脑批量开始",Toast.LENGTH_LONG).show();
         new android.os.Handler().postDelayed(this::refreshHealth,1800);
     }
 }
