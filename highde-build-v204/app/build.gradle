@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.tungee.amapbridge'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.tungee.amapbridge'
+        minSdk 26
+        targetSdk 35
+        versionCode 204
+        versionName '2.0.4'
+    }
+
+    buildTypes {
+        debug { minifyEnabled false }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
