@@ -2,7 +2,9 @@ package com.tungee.amapbridge;
 
 import android.app.*;
 import android.content.Intent;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -13,11 +15,11 @@ public class BridgeService extends Service {
     private volatile boolean running=false;
     private Socket socket; private BufferedReader reader; private BufferedWriter writer;
     private String host; private int port;
+    private final Handler mainHandler=new Handler(Looper.getMainLooper());
 
     @Override public void onCreate(){ super.onCreate(); instance=this; createChannel(); }
-
     @Override public int onStartCommand(Intent intent,int flags,int startId){
-        host=intent.getStringExtra("host"); port=intent.getIntExtra("port",8765);
+        if(intent!=null){ host=intent.getStringExtra("host"); port=intent.getIntExtra("port",8765); }
         startForeground(1001, notification("正在连接电脑…"));
         if(!running){running=true; new Thread(this::loop,"bridge-net").start();}
         return START_STICKY;
@@ -40,10 +42,12 @@ public class BridgeService extends Service {
         int wait=1500;
         while(running){
             try{
+                if(host==null||host.trim().isEmpty()){Thread.sleep(1500);continue;}
                 socket=new Socket(host,port); socket.setTcpNoDelay(true);
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
-                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.0.4"));
+                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.0.5")
+                        .put("accessibility",AmapAccessibilityService.isAlive()));
                 ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，等待酒店任务"));
                 wait=1500; String line;
                 while(running && (line=reader.readLine())!=null) handle(line);
@@ -56,18 +60,28 @@ public class BridgeService extends Service {
     private void handle(String line){
         try{
             JSONObject j=new JSONObject(line); String cmd=j.optString("cmd");
-            if("ping".equals(cmd)){send(new JSONObject().put("type","pong"));return;}
+            if("ping".equals(cmd)){send(new JSONObject().put("type","pong").put("accessibility",AmapAccessibilityService.isAlive()));return;}
+            if("status".equals(cmd)){send(new JSONObject().put("type","status").put("accessibility",AmapAccessibilityService.isAlive()).put("task_active",TaskState.active));return;}
             if("task".equals(cmd)){
                 String id=j.optString("task_id"), poi=j.optString("poi_id"), name=j.optString("name"), lat=j.optString("lat"), lon=j.optString("lon");
+                if(!AmapAccessibilityService.isAlive()){
+                    sendDebug(id,"无障碍服务未开启/未连接，任务不执行");
+                    sendResult(id,poi,name,"","","","","","accessibility_off","请在手机设置中开启“高德酒店采集助手”无障碍服务","");
+                    return;
+                }
                 TaskState.set(id,poi,name,lat,lon);
+                sendDebug(id,"收到任务，准备打开高德："+name+" | "+poi);
                 boolean ok=AmapLauncher.openPoi(this,poi,name,lat,lon);
                 send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",ok));
                 if(!ok){
                     sendResult(id,poi,name,"","","","","","open_failed","无法调起高德地图","");
-                    TaskState.clear();
+                    TaskState.clear(); return;
                 }
+                mainHandler.postDelayed(AmapAccessibilityService::kick,900);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,2200);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,4200);
             } else if("stop".equals(cmd)){ TaskState.clear(); }
-        }catch(Exception ignored){}
+        }catch(Exception e){ sendDebug(TaskState.taskId,"任务处理异常："+e.getClass().getSimpleName()+" "+String.valueOf(e.getMessage())); }
     }
     private synchronized void send(JSONObject j){
         try{ if(writer!=null){writer.write(j.toString());writer.write("\n");writer.flush();} }catch(Exception ignored){}
@@ -82,7 +96,7 @@ public class BridgeService extends Service {
     }
     public static void sendDebug(String taskId,String msg){
         BridgeService s=instance; if(s==null)return;
-        try{s.send(new JSONObject().put("type","debug").put("task_id",taskId).put("message",msg));}catch(Exception ignored){}
+        try{s.send(new JSONObject().put("type","debug").put("task_id",taskId==null?"":taskId).put("message",msg));}catch(Exception ignored){}
     }
     private void close(){
         try{if(reader!=null)reader.close();}catch(Exception ignored){}
