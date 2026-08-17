@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">高德酒店采集助手</string>
+    <string name="accessibility_desc">读取高德地图酒店详情页中的开业时间、装修时间、客房数和电话，并将结果回传到电脑端。</string>
+</resources>
