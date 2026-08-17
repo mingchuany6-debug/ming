@@ -48,9 +48,9 @@ public class BridgeService extends Service {
                 socket=new Socket(host,port); socket.setTcpNoDelay(true); connected=true;
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
-                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.0.5")
+                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.1.0")
                         .put("accessibility",AmapAccessibilityService.isAlive()));
-                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，等待酒店任务"));
+                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，智能搜寻模式待命"));
                 wait=1500; String line;
                 while(running && (line=reader.readLine())!=null) handle(line);
             }catch(Exception e){
@@ -65,23 +65,28 @@ public class BridgeService extends Service {
             if("ping".equals(cmd)){send(new JSONObject().put("type","pong").put("accessibility",AmapAccessibilityService.isAlive()));return;}
             if("status".equals(cmd)){send(new JSONObject().put("type","status").put("accessibility",AmapAccessibilityService.isAlive()).put("task_active",TaskState.active));return;}
             if("task".equals(cmd)){
-                String id=j.optString("task_id"), poi=j.optString("poi_id"), name=j.optString("name"), lat=j.optString("lat"), lon=j.optString("lon");
+                String id=j.optString("task_id"), poi=j.optString("poi_id"), name=j.optString("name"), lat=j.optString("lat"), lon=j.optString("lon"), address=j.optString("address");
                 if(!AmapAccessibilityService.isAlive()){
                     sendDebug(id,"无障碍服务未开启/未连接，任务不执行");
                     sendResult(id,poi,name,"","","","","","accessibility_off","请在手机设置中开启“高德酒店采集助手”无障碍服务","");
                     return;
                 }
-                TaskState.set(id,poi,name,lat,lon);
-                sendDebug(id,"收到任务，准备打开高德："+name+" | "+poi);
+                TaskState.set(id,poi,name,lat,lon,address);
+                sendDebug(id,"收到任务：先POI直达，找不到线索将自动关键词搜索｜"+name+"｜"+poi);
                 boolean ok=AmapLauncher.openPoi(this,poi,name,lat,lon);
                 send(new JSONObject().put("type","task_opened").put("task_id",id).put("ok",ok));
                 if(!ok){
-                    sendResult(id,poi,name,"","","","","","open_failed","无法调起高德地图","");
-                    TaskState.clear(); return;
+                    sendDebug(id,"POI直达失败，改用关键词搜索");
+                    boolean sok=AmapLauncher.openSearch(this,name,lat,lon);
+                    if(!sok){
+                        sendResult(id,poi,name,"","","","","","open_failed","POI直达和关键词搜索都无法调起高德地图","");
+                        TaskState.clear(); return;
+                    }
+                    AmapAccessibilityService.markSearchMode();
                 }
-                mainHandler.postDelayed(AmapAccessibilityService::kick,900);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,2200);
-                mainHandler.postDelayed(AmapAccessibilityService::kick,4200);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,700);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,1800);
+                mainHandler.postDelayed(AmapAccessibilityService::kick,3500);
             } else if("stop".equals(cmd)){ TaskState.clear(); }
         }catch(Exception e){ sendDebug(TaskState.taskId,"任务处理异常："+e.getClass().getSimpleName()+" "+String.valueOf(e.getMessage())); }
     }
