@@ -4,6 +4,7 @@
     android:notificationTimeout="180"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:packageNames="com.autonavi.minimap"
     android:description="@string/accessibility_desc" />
