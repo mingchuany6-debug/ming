@@ -48,9 +48,9 @@ public class BridgeService extends Service {
                 socket=new Socket(host,port); socket.setTcpNoDelay(true); connected=true;
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
-                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.2.0")
+                send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.2.1")
                         .put("accessibility",AmapAccessibilityService.isAlive()));
-                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，结果卡片直读模式待命"));
+                ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(1001,notification("已连接电脑，开业日期优先模式待命"));
                 wait=1500; String line;
                 while(running && (line=reader.readLine())!=null) handle(line);
             }catch(Exception e){
@@ -72,7 +72,7 @@ public class BridgeService extends Service {
                     return;
                 }
                 TaskState.set(id,poi,name,lat,lon,address);
-                sendDebug(id,"收到任务：优先搜索酒店并直接读取结果卡片中的开业年份/房量｜"+name+"｜"+poi);
+                sendDebug(id,"收到任务：搜索酒店→匹配结果卡→优先读取完整开业日期/房量｜"+name+"｜"+poi);
 
                 boolean ok=AmapLauncher.openSearch(this,name,lat,lon);
                 if(ok){
