@@ -1,0 +1,37 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.tungee.amaphybridprobe'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.tungee.amaphybridprobe'
+        minSdk 26
+        targetSdk 35
+        versionCode 100
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        probe {
+            storeFile file('../signing/probe.jks')
+            storePassword 'ProbePass2026'
+            keyAlias 'probe'
+            keyPassword 'ProbePass2026'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.probe
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.amap.api:search:latest.integration'
+}
