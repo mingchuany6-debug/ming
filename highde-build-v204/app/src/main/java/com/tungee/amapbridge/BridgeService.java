@@ -12,11 +12,13 @@ import org.json.JSONObject;
 
 public class BridgeService extends Service {
     private static volatile BridgeService instance;
+    private static volatile boolean connected=false;
     private volatile boolean running=false;
     private Socket socket; private BufferedReader reader; private BufferedWriter writer;
     private String host; private int port;
     private final Handler mainHandler=new Handler(Looper.getMainLooper());
 
+    public static boolean isConnected(){ return connected; }
     @Override public void onCreate(){ super.onCreate(); instance=this; createChannel(); }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null){ host=intent.getStringExtra("host"); port=intent.getIntExtra("port",8765); }
@@ -24,7 +26,7 @@ public class BridgeService extends Service {
         if(!running){running=true; new Thread(this::loop,"bridge-net").start();}
         return START_STICKY;
     }
-    @Override public void onDestroy(){running=false; close(); instance=null; super.onDestroy();}
+    @Override public void onDestroy(){running=false; connected=false; close(); instance=null; super.onDestroy();}
     @Override public IBinder onBind(Intent i){return null;}
 
     private void createChannel(){
@@ -43,7 +45,7 @@ public class BridgeService extends Service {
         while(running){
             try{
                 if(host==null||host.trim().isEmpty()){Thread.sleep(1500);continue;}
-                socket=new Socket(host,port); socket.setTcpNoDelay(true);
+                socket=new Socket(host,port); socket.setTcpNoDelay(true); connected=true;
                 reader=new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer=new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(),StandardCharsets.UTF_8));
                 send(new JSONObject().put("type","hello").put("device",android.os.Build.MODEL).put("version","2.0.5")
@@ -54,7 +56,7 @@ public class BridgeService extends Service {
             }catch(Exception e){
                 try{Thread.sleep(wait);}catch(Exception ignored){}
                 wait=Math.min(10000,wait+1200);
-            } finally { close(); }
+            } finally { connected=false; close(); }
         }
     }
     private void handle(String line){
