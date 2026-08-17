@@ -1,0 +1,41 @@
+name: Build AMap Hybrid Probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'amap-hybrid-probe/**'
+      - '.github/workflows/amap-hybrid-probe.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Restore fixed signing key
+        working-directory: amap-hybrid-probe
+        run: base64 -d signing/probe.jks.b64 > signing/probe.jks
+      - name: Build release APK
+        working-directory: amap-hybrid-probe
+        run: gradle --no-daemon assembleRelease
+      - name: Verify certificate
+        run: |
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs amap-hybrid-probe/app/build/outputs/apk/release/app-release.apk
+      - name: Prepare artifact
+        run: cp amap-hybrid-probe/app/build/outputs/apk/release/app-release.apk AMap_Web_Android_DualKey_Probe_V1.0.apk
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMap_Web_Android_DualKey_Probe_V1.0
+          path: AMap_Web_Android_DualKey_Probe_V1.0.apk
+          if-no-files-found: error
