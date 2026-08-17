@@ -26,10 +26,10 @@ jobs:
         working-directory: highde-build-v204
         run: gradle --no-daemon assembleDebug
       - name: Prepare artifact
-        run: cp highde-build-v204/app/build/outputs/apk/debug/app-debug.apk HighDe_Hotel_Helper_V2.0.4.apk
+        run: cp highde-build-v204/app/build/outputs/apk/debug/app-debug.apk HighDe_Hotel_Helper_V2.0.5.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: HighDe_Hotel_Helper_V2.0.4
-          path: HighDe_Hotel_Helper_V2.0.4.apk
+          name: HighDe_Hotel_Helper_V2.0.5
+          path: HighDe_Hotel_Helper_V2.0.5.apk
           if-no-files-found: error
