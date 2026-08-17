@@ -14,14 +14,15 @@ import java.util.*;
 import java.util.regex.*;
 
 /**
- * V2.2.0 - 高德酒店搜索结果卡片优先读取。
+ * V2.2.1 - 高德酒店搜索卡片 + 详情字段联合补全。
  *
- * 核心策略：
- * 1) 主动搜索酒店名并真正提交搜索；
- * 2) 先定位“匹配酒店名”的搜索结果卡片；
- * 3) 只在同一张卡片内读取“2023年开业 / 101间房”等字段；
- * 4) 卡片已有开业/房量时直接回传，不再进入详情页盲滑；
- * 5) 卡片没有关键字段时才点击详情做兜底。
+ * 目标优先级：
+ * 1) 开业时间（完整日期 > 年月 > 年份）
+ * 2) 客房数
+ * 3) 电话/装修时间
+ *
+ * 搜索结果卡片能直接看到“2023年开业 | 101间房”时直接读；
+ * 如果卡片只有房量没有开业时间，则保留房量并进入详情继续寻找开业时间。
  */
 public class AmapAccessibilityService extends AccessibilityService {
     private static volatile AmapAccessibilityService instance;
@@ -31,11 +32,12 @@ public class AmapAccessibilityService extends AccessibilityService {
     private boolean clickedInfo = false, retriedNetwork = false, searchMode = false;
     private boolean searchSubmitted = false, directFallbackUsed = false, cardHit = false;
     private String lastTask = "";
+    private String cardRoomsHint = "", cardPhoneHint = "", cardNameCheckHint = "";
 
     @Override protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
-        BridgeService.sendDebug(TaskState.taskId, "无障碍服务已连接｜V2.2结果卡片直读");
+        BridgeService.sendDebug(TaskState.taskId, "无障碍服务已连接｜V2.2.1 开业日期优先");
     }
 
     @Override public void onDestroy() {
@@ -64,6 +66,9 @@ public class AmapAccessibilityService extends AccessibilityService {
             s.searchSubmitAttempts = 0;
             s.directFallbackUsed = false;
             s.cardHit = false;
+            s.cardRoomsHint = "";
+            s.cardPhoneHint = "";
+            s.cardNameCheckHint = "";
         }
     }
 
@@ -92,6 +97,9 @@ public class AmapAccessibilityService extends AccessibilityService {
             searchSubmitted = false;
             directFallbackUsed = false;
             cardHit = false;
+            cardRoomsHint = "";
+            cardPhoneHint = "";
+            cardNameCheckHint = "";
         }
     }
 
@@ -108,7 +116,7 @@ public class AmapAccessibilityService extends AccessibilityService {
         ArrayList<String> texts = new ArrayList<>();
         collect(root, texts, 0);
         String raw = String.join(" | ", texts);
-        if (raw.length() > 28000) raw = raw.substring(0, 28000);
+        if (raw.length() > 30000) raw = raw.substring(0, 30000);
         BridgeService.sendDebug(TaskState.taskId,
                 (searchMode ? "搜索阶段" : "详情阶段") + "读取文字 " + texts.size() +
                         " 项｜搜索滑动=" + searchScrollCount + "｜详情滑动=" + scrollCount);
@@ -128,6 +136,7 @@ public class AmapAccessibilityService extends AccessibilityService {
             }
             if (System.currentTimeMillis() - TaskState.startedAt > 6500) {
                 Result r = parse(raw, TaskState.hotelName);
+                mergeCardHints(r);
                 finish(r, "amap_network_error", "高德页面提示网络异常", raw);
                 return true;
             }
@@ -136,7 +145,6 @@ public class AmapAccessibilityService extends AccessibilityService {
     }
 
     private void handleSearchPage(AccessibilityNodeInfo root, String raw) {
-        // 1. 先确保高德真正提交了搜索，而不是只把酒店名放在搜索框里。
         if (!searchSubmitted) {
             boolean ok = submitSearch(root, TaskState.hotelName);
             searchSubmitAttempts++;
@@ -155,36 +163,38 @@ public class AmapAccessibilityService extends AccessibilityService {
             if (fallbackPoi()) return;
         }
 
-        // 2. 搜索完成后优先读取与目标酒店名对应的“同一张搜索结果卡片”。
         CardMatch card = findBestHotelCard(root, TaskState.hotelName);
         if (card != null && card.score >= 65) {
             BridgeService.sendDebug(TaskState.taskId,
-                    "找到目标酒店结果卡｜匹配分=" + card.score + "｜卡片文字=" + compact(card.text, 220));
+                    "找到目标酒店结果卡｜匹配分=" + card.score + "｜卡片文字=" + compact(card.text, 260));
             Result cr = parse(card.text, TaskState.hotelName);
             cr.nameCheck = card.score >= 80 ? "通过" : "待核实";
+            if (!cr.rooms.isEmpty()) cardRoomsHint = cr.rooms;
+            if (!cr.phone.isEmpty()) cardPhoneHint = cr.phone;
+            if (!cr.nameCheck.isEmpty()) cardNameCheckHint = cr.nameCheck;
 
-            // 高德酒店卡片常见：2023年开业 | 101间房。
-            if (!cr.open.isEmpty() || !cr.rooms.isEmpty()) {
+            // 主目标是开业时间：找到就立即结束。
+            if (!cr.open.isEmpty()) {
                 cardHit = true;
-                String extra = "高德搜索结果卡片直读";
-                if (cr.open.isEmpty()) extra += "；卡片未显示开业年份";
-                if (cr.rooms.isEmpty()) extra += "；卡片未显示房量";
-                finish(cr, "success", extra, card.text);
+                finish(cr, "success", "高德搜索结果卡片直读开业时间", card.text);
                 return;
             }
 
-            // 找到正确卡片但关键字段没暴露，才点进去继续详情兜底。
+            // 只有房量/电话不能提前结束，保留线索后进入详情继续找开业时间。
+            if (!cr.rooms.isEmpty() || !cr.phone.isEmpty()) {
+                BridgeService.sendDebug(TaskState.taskId,
+                        "结果卡已抓到房量/电话，但没有开业时间，保留线索并进入详情继续找");
+            }
             if (clickCard(card)) {
                 searchMode = false;
                 scrollCount = 0;
                 clickedInfo = false;
-                BridgeService.sendDebug(TaskState.taskId, "目标卡片未显示开业/房量，已点击酒店详情兜底");
+                BridgeService.sendDebug(TaskState.taskId, "已点击匹配酒店卡片，详情兜底查找开业时间");
                 h.postDelayed(scanRunnable, 900);
                 return;
             }
         }
 
-        // 某些高德版本搜索后会直接进入详情。
         if (looksLikeHotelDetail(raw, TaskState.hotelName)) {
             searchMode = false;
             scrollCount = 0;
@@ -194,7 +204,6 @@ public class AmapAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // 最多在搜索结果里翻 3 屏找同名酒店，避免无限滑动。
         if (searchScrollCount < 3) {
             boolean moved = scrollForward(root);
             if (!moved) moved = swipeUp();
@@ -207,15 +216,14 @@ public class AmapAccessibilityService extends AccessibilityService {
 
         if (fallbackPoi()) return;
         Result r = parse(raw, TaskState.hotelName);
+        mergeCardHints(r);
         finish(r, "search_no_match", "关键词搜索未找到匹配酒店卡片", raw);
     }
 
-    /** 找到搜索框，写入酒店名，并主动点击“搜索/键盘搜索键”。 */
     private boolean submitSearch(AccessibilityNodeInfo root, String keyword) {
         try {
             AccessibilityNodeInfo input = findSearchInput(root, keyword);
             if (input == null) {
-                // URI 有时先把关键词展示成普通文本，先点一下顶部关键词区域使输入框激活。
                 boolean tapped = tapNodeContaining(root, keyword);
                 if (tapped) BridgeService.sendDebug(TaskState.taskId, "已点击顶部酒店名搜索框，等待输入控件");
                 return false;
@@ -234,7 +242,6 @@ public class AmapAccessibilityService extends AccessibilityService {
             }
 
             if (set) {
-                // 输入法的“搜索”键通常不在高德无障碍树里，用系统手势点击右下角。
                 h.postDelayed(() -> {
                     boolean tapped = tapImeSearch();
                     BridgeService.sendDebug(TaskState.taskId,
@@ -268,10 +275,6 @@ public class AmapAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    /**
-     * 搜索结果卡片匹配：先匹配酒店标题，再向上寻找最小的卡片容器，
-     * 只从该容器的子节点读取“开业/房量”，防止串到其他搜索结果。
-     */
     private CardMatch findBestHotelCard(AccessibilityNodeInfo root, String expected) {
         CardMatch best = new CardMatch();
         findCardCandidates(root, expected, best);
@@ -289,7 +292,6 @@ public class AmapAccessibilityService extends AccessibilityService {
                 Rect tb = new Rect();
                 n.getBoundsInScreen(tb);
                 DisplayMetrics dm = getResources().getDisplayMetrics();
-                // 顶部搜索框会重复出现关键词，排除屏幕顶部输入区域。
                 if (tb.centerY() > dm.heightPixels * 0.14f) {
                     evaluateCardAncestors(n, expected, title, ns, best, dm);
                 }
@@ -306,7 +308,6 @@ public class AmapAccessibilityService extends AccessibilityService {
             c.getBoundsInScreen(b);
             int bh = b.height();
             if (bh <= 0) continue;
-            // 结果卡一般只占一部分屏幕；超过 72% 高度基本已经是整页根节点，拒绝。
             if (bh > dm.heightPixels * 0.72f) continue;
             if (b.bottom < dm.heightPixels * 0.16f) continue;
 
@@ -324,9 +325,8 @@ public class AmapAccessibilityService extends AccessibilityService {
             if (!hasHotelMeta) continue;
 
             int score = nameScore * 10;
-            if (!p.open.isEmpty()) score += 150;
+            if (!p.open.isEmpty()) score += 180;
             if (!p.rooms.isEmpty()) score += 100;
-            // 更小、更局部的容器优先，降低串卡风险。
             score -= Math.min(160, cardTexts.size() * 2);
             score -= Math.min(120, bh / 20);
 
@@ -420,12 +420,12 @@ public class AmapAccessibilityService extends AccessibilityService {
         return markers >= 3;
     }
 
-    /** 详情页只做兜底，正常有“年开业|间房”的酒店搜索卡不会走到这里。 */
     private void handleDetailPage(AccessibilityNodeInfo root, String raw) {
         Result r = parse(raw, TaskState.hotelName);
+        mergeCardHints(r);
         long elapsed = System.currentTimeMillis() - TaskState.startedAt;
         if (!r.open.isEmpty()) {
-            finish(r, "success", "详情页兜底识别", raw);
+            finish(r, "success", "详情页识别到开业时间", raw);
             return;
         }
         if (!clickedInfo && clickAny(root,
@@ -441,7 +441,7 @@ public class AmapAccessibilityService extends AccessibilityService {
             if (!moved) moved = swipeUp();
             scrollCount++;
             BridgeService.sendDebug(TaskState.taskId,
-                    moved ? "详情兜底上滑，继续找开业/房量" : "详情本轮无法滚动");
+                    moved ? "详情兜底上滑，继续找开业时间" : "详情本轮无法滚动");
             h.postDelayed(scanRunnable, moved ? 600 : 520);
             return;
         }
@@ -450,11 +450,18 @@ public class AmapAccessibilityService extends AccessibilityService {
         else h.postDelayed(scanRunnable, 520);
     }
 
+    private void mergeCardHints(Result r) {
+        if (r.rooms.isEmpty() && !cardRoomsHint.isEmpty()) r.rooms = cardRoomsHint;
+        if (r.phone.isEmpty() && !cardPhoneHint.isEmpty()) r.phone = cardPhoneHint;
+        if (r.nameCheck.isEmpty() && !cardNameCheckHint.isEmpty()) r.nameCheck = cardNameCheckHint;
+    }
+
     private void finish(Result r, String status, String extra, String raw) {
+        mergeCardHints(r);
         String path;
         if (cardHit) path = "酒店名搜索→匹配结果卡片直读";
         else if (directFallbackUsed) path = "酒店名搜索→POI详情兜底";
-        else path = "酒店名搜索→详情兜底";
+        else path = "酒店名搜索→匹配卡片→详情兜底";
 
         String evidence = "路径=" + path + "；开业=" + r.open + "；装修=" + r.renovate +
                 "；客房=" + r.rooms + "；电话=" + r.phone;
@@ -471,6 +478,9 @@ public class AmapAccessibilityService extends AccessibilityService {
         searchSubmitted = false;
         directFallbackUsed = false;
         cardHit = false;
+        cardRoomsHint = "";
+        cardPhoneHint = "";
+        cardNameCheckHint = "";
         lastTask = "";
     }
 
@@ -497,7 +507,6 @@ public class AmapAccessibilityService extends AccessibilityService {
             if (min >= 9) return 95;
             if (min >= 6) return 84;
         }
-        // 括号门店名很重要：长前缀一致也认为高相关，但不直接给满分。
         int common = 0, max = Math.min(a.length(), e.length());
         while (common < max && a.charAt(common) == e.charAt(common)) common++;
         if (common >= 12) return 88;
@@ -549,7 +558,6 @@ public class AmapAccessibilityService extends AccessibilityService {
 
     private boolean tapImeSearch() {
         DisplayMetrics dm = getResources().getDisplayMetrics();
-        // 适配常见中文输入法：右下角蓝色“搜索/完成”键。
         return tap(dm.widthPixels * 0.91f, dm.heightPixels * 0.945f);
     }
 
@@ -572,31 +580,15 @@ public class AmapAccessibilityService extends AccessibilityService {
     private Result parse(String raw, String expected) {
         Result r = new Result();
         String s = raw == null ? "" : raw.replace('：', ':');
-
-        // 搜索结果卡最关键格式：2023年开业 / 2026年3月开业。
-        r.open = first(s, new String[]{
-                "((?:19|20)\\d{2})\\s*年\\s*(?:开业|开张|开店)",
-                "((?:19|20)\\d{2})\\s*年\\s*(?:0?[1-9]|1[0-2])\\s*月\\s*(?:开业|开张|开店)",
-                "(?:开业时间|开业|开张|开店)\\s*[:：]?\\s*((?:19|20)\\d{2})(?:年)?"
-        });
-        // 若第一条只拿到年，保留年；如果明确有年月，再优先覆盖成 YYYY-MM。
-        String ym = first(s, new String[]{
-                "((?:19|20)\\d{2})\\s*年\\s*(0?[1-9]|1[0-2])\\s*月\\s*(?:开业|开张|开店)",
-                "(?:开业时间|开业)\\s*[:：]?\\s*((?:19|20)\\d{2})[年./-]\\s*(0?[1-9]|1[0-2])"
-        }, true);
-        if (!ym.isEmpty()) r.open = ym;
-
-        r.renovate = first(s, new String[]{
-                "(?:装修时间|装修|翻新)\\s*[:：]?\\s*((?:19|20)\\d{2})(?:年)?",
-                "((?:19|20)\\d{2})\\s*年\\s*(?:装修|翻新)"
-        });
+        r.open = extractOpening(s);
+        r.renovate = extractRenovate(s);
         r.rooms = first(s, new String[]{
                 "(\\d{1,4})\\s*间\\s*房",
                 "(\\d{1,4})\\s*间\\s*(?:客房|房间)",
-                "(?:客房数|客房数量|房间数|房型数量)\\s*[:：]?\\s*(\\d{1,4})"
+                "(?:客房数|客房数量|房间数|房型数量)\\s*[:：|]?\\s*(\\d{1,4})"
         });
         r.phone = first(s, new String[]{
-                "(?:酒店电话|联系电话|电话|前台电话)\\s*[:：]?\\s*((?:\\+?86[- ]?)?(?:0\\d{2,3}[- ]?)?\\d{7,8}|1[3-9]\\d{9})"
+                "(?:酒店电话|联系电话|电话|前台电话)\\s*[:：|]?\\s*((?:\\+?86[- ]?)?(?:0\\d{2,3}[- ]?)?\\d{7,8}|1[3-9]\\d{9})"
         });
 
         String a = norm(expected), b = norm(s);
@@ -607,26 +599,64 @@ public class AmapAccessibilityService extends AccessibilityService {
         return r;
     }
 
+    /** 完整日期 > 年月 > 年份。只有明确出现“开业/开张/开店”语义时才采信。 */
+    private String extractOpening(String s) {
+        // 开业时间 | 2022年09月01日 / 开业日期:2022-09-01
+        String full = dateByLabel(s, "(?:开业时间|开业日期|开业于|开业)");
+        if (!full.isEmpty()) return full;
+
+        // 2022年09月01日 开业
+        Matcher m = Pattern.compile("((?:19|20)\\d{2})\\s*[年./-]\\s*(0?[1-9]|1[0-2])\\s*[月./-]\\s*(0?[1-9]|[12]\\d|3[01])\\s*(?:日|号)?\\s*(?:正式)?(?:开业|开张|开店)").matcher(s);
+        if (m.find()) return fmtDate(m.group(1), m.group(2), m.group(3));
+
+        // 2022年09月开业 / 开业时间 2022年09月
+        m = Pattern.compile("(?:开业时间|开业日期|开业于|开业)[\\s|:：-]{0,10}((?:19|20)\\d{2})\\s*[年./-]\\s*(0?[1-9]|1[0-2])\\s*(?:月)?").matcher(s);
+        if (m.find()) return fmtYearMonth(m.group(1), m.group(2));
+        m = Pattern.compile("((?:19|20)\\d{2})\\s*年\\s*(0?[1-9]|1[0-2])\\s*月\\s*(?:正式)?(?:开业|开张|开店)").matcher(s);
+        if (m.find()) return fmtYearMonth(m.group(1), m.group(2));
+
+        // 2023年开业 / 开业时间：2023年
+        m = Pattern.compile("((?:19|20)\\d{2})\\s*年\\s*(?:正式)?(?:开业|开张|开店)").matcher(s);
+        if (m.find()) return m.group(1);
+        m = Pattern.compile("(?:开业时间|开业日期|开业于|开业)[\\s|:：-]{0,10}((?:19|20)\\d{2})\\s*(?:年)?").matcher(s);
+        if (m.find()) return m.group(1);
+        return "";
+    }
+
+    private String dateByLabel(String s, String label) {
+        Matcher m = Pattern.compile(label + "[\\s|:：-]{0,10}((?:19|20)\\d{2})\\s*[年./-]\\s*(0?[1-9]|1[0-2])\\s*[月./-]\\s*(0?[1-9]|[12]\\d|3[01])\\s*(?:日|号)?").matcher(s);
+        if (m.find()) return fmtDate(m.group(1), m.group(2), m.group(3));
+        return "";
+    }
+
+    private String extractRenovate(String s) {
+        Matcher m = Pattern.compile("(?:装修时间|装修日期|装修|翻新)[\\s|:：-]{0,10}((?:19|20)\\d{2})\\s*[年./-]\\s*(0?[1-9]|1[0-2])\\s*[月./-]\\s*(0?[1-9]|[12]\\d|3[01])\\s*(?:日|号)?").matcher(s);
+        if (m.find()) return fmtDate(m.group(1), m.group(2), m.group(3));
+        m = Pattern.compile("(?:装修时间|装修日期|装修|翻新)[\\s|:：-]{0,10}((?:19|20)\\d{2})\\s*[年./-]\\s*(0?[1-9]|1[0-2])\\s*(?:月)?").matcher(s);
+        if (m.find()) return fmtYearMonth(m.group(1), m.group(2));
+        m = Pattern.compile("(?:装修时间|装修日期|装修|翻新)[\\s|:：-]{0,10}((?:19|20)\\d{2})\\s*(?:年)?").matcher(s);
+        if (m.find()) return m.group(1);
+        return "";
+    }
+
+    private String fmtDate(String y, String mo, String d) {
+        try {
+            int m = Integer.parseInt(mo), day = Integer.parseInt(d);
+            return String.format(Locale.US, "%s-%02d-%02d", y, m, day);
+        } catch (Exception e) { return y; }
+    }
+
+    private String fmtYearMonth(String y, String mo) {
+        try {
+            int m = Integer.parseInt(mo);
+            return String.format(Locale.US, "%s-%02d", y, m);
+        } catch (Exception e) { return y; }
+    }
+
     private String first(String s, String[] ps) {
         for (String p : ps) {
             Matcher m = Pattern.compile(p, Pattern.CASE_INSENSITIVE).matcher(s);
             if (m.find()) return m.group(1).replace(" ", "").trim();
-        }
-        return "";
-    }
-
-    private String first(String s, String[] ps, boolean yearMonth) {
-        for (String p : ps) {
-            Matcher m = Pattern.compile(p, Pattern.CASE_INSENSITIVE).matcher(s);
-            if (m.find()) {
-                if (yearMonth && m.groupCount() >= 2) {
-                    try {
-                        int month = Integer.parseInt(m.group(2));
-                        return m.group(1) + "-" + String.format(Locale.US, "%02d", month);
-                    } catch (Exception ignored) {}
-                }
-                return m.group(1).replace(" ", "").trim();
-            }
         }
         return "";
     }
